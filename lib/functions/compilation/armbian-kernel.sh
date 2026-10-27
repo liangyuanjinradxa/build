@@ -606,7 +606,6 @@ function armbian_kernel_config__enable_docker_support() {
 	# Keyring and resource management
 	opts_y+=("PERSISTENT_KEYRINGS") # Enables persistent keyring support
 	opts_m+=("RESOURCE_COUNTERS")   # Enables resource counters support in cgroups
-	opts_y+=("RT_GROUP_SCHED")      # Enables real-time group scheduling
 	# Security features
 	opts_y+=("SECURITY_APPARMOR") # Enables AppArmor security module support
 	opts_y+=("SECCOMP")           # Enables seccomp (secure computing) support

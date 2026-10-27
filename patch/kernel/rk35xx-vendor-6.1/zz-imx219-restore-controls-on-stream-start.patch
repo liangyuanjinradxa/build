@@ -1,0 +1,91 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Local build <builder@localhost>
+Date: Fri, 23 Oct 2026 15:30:00 +0800
+Subject: [PATCH] media: i2c: imx219: restore exposure and gain on stream start
+
+Mode setup resets exposure to 500 lines.
+Restore cached register values before stream start.
+Serialize stream transitions with controls.
+Preserve the effective gain because both gain controls write the same
+registers.
+
+---
+diff --git a/drivers/media/i2c/imx219.c b/drivers/media/i2c/imx219.c
+--- a/drivers/media/i2c/imx219.c
++++ b/drivers/media/i2c/imx219.c
+@@ -14,6 +14,7 @@
+ #include <linux/init.h>
+ #include <linux/io.h>
+ #include <linux/module.h>
++#include <linux/mutex.h>
+ #include <linux/of_graph.h>
+ #include <linux/slab.h>
+ #include <linux/videodev2.h>
+@@ -341,7 +342,7 @@
+ }
+ 
+ /* V4L2 subdev video operations */
+-static int imx219_s_stream(struct v4l2_subdev *sd, int enable)
++static int __imx219_s_stream(struct v4l2_subdev *sd, int enable)
+ {
+ 	struct i2c_client *client = v4l2_get_subdevdata(sd);
+ 	struct imx219 *priv = to_imx219(client);
+@@ -419,7 +420,37 @@
+ 	if (ret)
+ 		return ret;
+ 
++	/* Mode setup overwrites exposure. Restore the effective gain and exposure. */
++	ret = reg_write(client, 0x0157, priv->analogue_gain);
++	if (ret)
++		return ret;
++	ret = reg_write(client, 0x0158, priv->digital_gain >> 8);
++	if (ret)
++		return ret;
++	ret = reg_write(client, 0x0159, priv->digital_gain & 0xff);
++	if (ret)
++		return ret;
++	ret = reg_write(client, 0x015a, priv->exposure_time >> 8);
++	if (ret)
++		return ret;
++	ret = reg_write(client, 0x015b, priv->exposure_time & 0xff);
++	if (ret)
++		return ret;
++
+ 	return reg_write_table(client, start);
++}
++
++static int imx219_s_stream(struct v4l2_subdev *sd, int enable)
++{
++	struct i2c_client *client = v4l2_get_subdevdata(sd);
++	struct imx219 *priv = to_imx219(client);
++	int ret;
++
++	mutex_lock(priv->ctrl_handler.lock);
++	ret = __imx219_s_stream(sd, enable);
++	mutex_unlock(priv->ctrl_handler.lock);
++
++	return ret;
+ }
+ 
+ /* V4L2 subdev core operations */
+@@ -626,7 +657,7 @@
+ 	/* If enabled, apply settings immediately */
+ 	reg = reg_read(client, 0x0100);
+ 	if ((reg & 0x1f) == 0x01)
+-		imx219_s_stream(&priv->subdev, 1);
++		return __imx219_s_stream(&priv->subdev, 1);
+ 
+ 	return 0;
+ }
+@@ -1004,6 +1035,11 @@
+ 		goto error;
+ 	}
+ 
++	/* Flip setup can restart a sensor that is already streaming. */
++	priv->analogue_gain = 0;
++	priv->digital_gain = IMX219_DIGITAL_GAIN_DEFAULT;
++	priv->exposure_time = IMX219_DIGITAL_EXPOSURE_DEFAULT;
++
+ 	ret = v4l2_ctrl_handler_setup(&priv->ctrl_handler);
+ 	if (ret < 0) {
+ 		dev_err(&client->dev, "Error %d setting default controls\n",
